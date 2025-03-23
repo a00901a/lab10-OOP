@@ -1,0 +1,297 @@
+using System;
+using System.Drawing;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Security.Cryptography;
+
+namespace CryptoDemo
+{
+    static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new Form1());
+        }
+    }
+
+    public class Form1 : Form
+    {
+        // Елементи інтерфейсу
+        private TextBox txtInput;
+        private Button btnRunAll;
+        private Label lblRc5Result;
+        private Label lblMd3Result;
+        private Label lblCaesarResult;
+
+        public Form1()
+        {
+            // Налаштування форми
+            this.Text = "Crypto Demo";
+            this.Size = new Size(600, 300);
+            this.StartPosition = FormStartPosition.CenterScreen;
+
+            // Поле для введення
+            txtInput = new TextBox
+            {
+                Location = new Point(20, 20),
+                Width = 400
+            };
+            this.Controls.Add(txtInput);
+
+            // Кнопка запуску
+            btnRunAll = new Button
+            {
+                Text = "Run All (Async)",
+                Location = new Point(430, 18),
+                Width = 120
+            };
+            btnRunAll.Click += BtnRunAll_Click;
+            this.Controls.Add(btnRunAll);
+
+            // Результати
+            lblRc5Result = new Label
+            {
+                Text = "RC5 Encrypted: ",
+                Location = new Point(20, 70),
+                Width = 550
+            };
+            this.Controls.Add(lblRc5Result);
+
+            lblMd3Result = new Label
+            {
+                Text = "MD3 Hash: ",
+                Location = new Point(20, 110),
+                Width = 550
+            };
+            this.Controls.Add(lblMd3Result);
+
+            lblCaesarResult = new Label
+            {
+                Text = "Caesar: ",
+                Location = new Point(20, 150),
+                Width = 550
+            };
+            this.Controls.Add(lblCaesarResult);
+        }
+
+        private async void BtnRunAll_Click(object sender, EventArgs e)
+        {
+            string input = txtInput.Text.Trim();
+            if (string.IsNullOrEmpty(input))
+            {
+                MessageBox.Show("Введіть будь ласка рядок для обробки.");
+                return;
+            }
+
+            try
+            {
+                // Запускаємо три асинхронні завдання:
+                var rc5Task = Task.Run(() =>
+                {
+                    // Фіксований ключ для прикладу
+                    string key = "MySecretKey";
+                    byte[] encrypted = Rc5Encryptor.EncryptString(input, key);
+                    return BitConverter.ToString(encrypted);
+                });
+
+                var md3Task = Task.Run(() =>
+                {
+                    byte[] hash = Md3Hash.ComputeMd3(input);
+                    return BitConverter.ToString(hash);
+                });
+
+                var caesarTask = Task.Run(() =>
+                {
+                    int shift = 3; // або можна згенерувати випадковий
+                    string encrypted = CaesarCipher.Encrypt(input, shift);
+
+                    int randomNumber = RandomGenerator.Generate(1, 100);
+
+                    return $"Caesar({shift}): {encrypted} | Rand: {randomNumber}";
+                });
+
+                // Чекаємо виконання всіх завдань
+                var results = await Task.WhenAll(rc5Task, md3Task, caesarTask);
+
+                // Виводимо результати
+                lblRc5Result.Text = "RC5 Encrypted: " + results[0];
+                lblMd3Result.Text = "MD3 Hash: " + results[1];
+                lblCaesarResult.Text = results[2];
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Помилка: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Спрощена реалізація RC5 (тільки для демонстрації).
+    /// </summary>
+    public static class Rc5Encryptor
+    {
+        private const int WordSize = 32;
+        private const int Rounds = 12;
+
+        public static byte[] EncryptString(string plaintext, string key)
+        {
+            byte[] ptBytes = Encoding.UTF8.GetBytes(plaintext);
+
+            // Генеруємо підключі
+            uint[] subKeys = GenerateSubKeys(key);
+
+            // Кількість блоків по 8 байт (2 слова по 4 байти)
+            int blockCount = (ptBytes.Length + 7) / 8;
+            byte[] output = new byte[blockCount * 8];
+
+            for (int i = 0; i < blockCount; i++)
+            {
+                byte[] block = new byte[8];
+                int offset = i * 8;
+                int copyLen = Math.Min(8, ptBytes.Length - offset);
+                Array.Copy(ptBytes, offset, block, 0, copyLen);
+
+                byte[] encryptedBlock = EncryptBlock(block, subKeys);
+                Array.Copy(encryptedBlock, 0, output, offset, 8);
+            }
+
+            return output;
+        }
+
+        private static byte[] EncryptBlock(byte[] block, uint[] subKeys)
+        {
+            uint A = BitConverter.ToUInt32(block, 0);
+            uint B = BitConverter.ToUInt32(block, 4);
+
+            A += subKeys[0];
+            B += subKeys[1];
+
+            for (int i = 1; i <= Rounds; i++)
+            {
+                A = RotateLeft(A ^ B, (int)B) + subKeys[2 * i];
+                B = RotateLeft(B ^ A, (int)A) + subKeys[2 * i + 1];
+            }
+
+            byte[] encrypted = new byte[8];
+            Array.Copy(BitConverter.GetBytes(A), 0, encrypted, 0, 4);
+            Array.Copy(BitConverter.GetBytes(B), 0, encrypted, 4, 4);
+
+            return encrypted;
+        }
+
+        private static uint[] GenerateSubKeys(string key)
+        {
+            byte[] keyBytes = Encoding.UTF8.GetBytes(key);
+
+            int b = keyBytes.Length;
+            int u = WordSize / 8;
+            int c = (b + (u - 1)) / u;
+            uint[] L = new uint[c];
+
+            for (int i = b - 1; i >= 0; i--)
+            {
+                L[i / u] = (L[i / u] << 8) + keyBytes[i];
+            }
+
+            uint[] S = new uint[2 * (Rounds + 1)];
+
+            // Магічні константи
+            uint P = 0xB7E15163;
+            uint Q = 0x9E3779B9;
+
+            S[0] = P;
+            for (int i = 1; i < S.Length; i++)
+            {
+                S[i] = S[i - 1] + Q;
+            }
+
+            uint A = 0, B = 0;
+            int iIndex = 0, jIndex = 0;
+            int n = 3 * Math.Max(S.Length, c);
+
+            for (int k = 0; k < n; k++)
+            {
+                A = S[iIndex] = RotateLeft(S[iIndex] + A + B, 3);
+                B = L[jIndex] = RotateLeft(L[jIndex] + A + B, (int)(A + B));
+                iIndex = (iIndex + 1) % S.Length;
+                jIndex = (jIndex + 1) % c;
+            }
+
+            return S;
+        }
+
+        private static uint RotateLeft(uint value, int shift)
+        {
+            shift &= 31;
+            return (value << shift) | (value >> (32 - shift));
+        }
+    }
+
+    /// <summary>
+    /// "Муляж" MD3, що насправді використовує MD5 і просто обрізає результат.
+    /// </summary>
+    public static class Md3Hash
+    {
+        public static byte[] ComputeMd3(string input)
+        {
+            // Повноцінного MD3 у .NET немає, тому для демонстрації:
+            // Беремо MD5 і обрізаємо/видозмінюємо результат (не справжній MD3!)
+            using (var md5 = MD5.Create())
+            {
+                byte[] md5Bytes = md5.ComputeHash(Encoding.UTF8.GetBytes(input));
+                // Імітація: беремо перші 12 байт
+                byte[] md3Bytes = new byte[12];
+                Array.Copy(md5Bytes, 0, md3Bytes, 0, 12);
+                return md3Bytes;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Шифр Цезаря для прикладу (латинська абетка).
+    /// </summary>
+    public static class CaesarCipher
+    {
+        public static string Encrypt(string input, int shift)
+        {
+            char[] buffer = input.ToCharArray();
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                char letter = buffer[i];
+                if (char.IsLetter(letter))
+                {
+                    bool isUpper = char.IsUpper(letter);
+                    char offset = isUpper ? 'A' : 'a';
+                    int position = letter - offset;
+                    position = (position + shift) % 26;
+                    buffer[i] = (char)(offset + position);
+                }
+            }
+            return new string(buffer);
+        }
+
+        public static string Decrypt(string input, int shift)
+        {
+            // Для дешифру зсуваємось у протилежний бік
+            return Encrypt(input, 26 - shift);
+        }
+    }
+
+    /// <summary>
+    /// Генерація випадкових чисел (демонстраційна).
+    /// Для криптографії краще використовувати RandomNumberGenerator.
+    /// </summary>
+    public static class RandomGenerator
+    {
+        private static readonly Random _rnd = new Random();
+
+        public static int Generate(int minValue, int maxValue)
+        {
+            return _rnd.Next(minValue, maxValue);
+        }
+    }
+}
